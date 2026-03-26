@@ -393,7 +393,7 @@ const PRETEST_QUESTIONS = [
 // Single topic for Pre-Test
 const TOPICS = {
     pretest: {
-        name: "AP Chemistry Comprehensive Pre-Test (Units 1-9)",
+        name: "AP Chemistry Comprehensive Pre-Test",
         icon: "fas fa-flask",
         order: 0,
         questions: PRETEST_QUESTIONS.map(q => randomizeQuestion(q))

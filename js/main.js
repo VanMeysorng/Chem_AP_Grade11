@@ -1,5 +1,4 @@
-// main.js - Main application logic for AP Chemistry Pre-Test
-// Supports multiple choice, short answer, and free response questions
+// main.js - AP Chemistry Pre-Test (No Timer, Skip Option Working)
 
 // Global variables
 let topicsState = {};
@@ -7,13 +6,12 @@ let globalStreak = 0;
 let totalPossible = 0;
 let currentTopic = null;
 let confettiAnimationId = null;
-let autoAdvanceTimer = null;
 let userId = null;
 let selectedAnswerValue = null;
 let shortAnswerText = null;
 let isProcessing = false;
 
-// User Management Functions
+// ==================== USER MANAGEMENT ====================
 function initializeUser() {
     let savedUser = localStorage.getItem('chemMasterUser');
     if (!savedUser) {
@@ -54,12 +52,12 @@ function loadProgress() {
 }
 
 function resetProgress() {
-    if (confirm('Are you sure you want to reset ALL your progress? This cannot be undone.')) {
+    if (confirm('Are you sure you want to reset ALL your progress?')) {
         for (let tid of TOPIC_ORDER) {
             const qlist = TOPICS[tid].questions;
             topicsState[tid] = {
                 currentIdx: 0,
-                answers: qlist.map(() => ({ answered: false, correct: false, userAnswer: null }))
+                answers: qlist.map(() => ({ answered: false, status: null, userAnswer: null }))
             };
         }
         globalStreak = 0;
@@ -67,71 +65,178 @@ function resetProgress() {
         updateStats();
         renderDashboard();
         if (currentTopic) closeArena();
-        alert('Progress has been reset!');
+        showToast('Progress has been reset!');
     }
 }
 
 function showUserInfo() {
-    const correctCount = Object.values(topicsState).reduce((sum, state) => 
-        sum + state.answers.filter(a => a.correct).length, 0);
-    alert(`👤 Student: ${userId}\n📊 Total Score: ${correctCount}/${totalPossible}\n🔥 Current Streak: ${globalStreak}\n\nProgress is automatically saved!`);
+    const correctCount = Object.values(topicsState).reduce(
+        (sum, state) => sum + (state.answers.filter(a => a.status === 'correct').length), 0
+    );
+    const skippedCount = Object.values(topicsState).reduce(
+        (sum, state) => sum + (state.answers.filter(a => a.status === 'skipped').length), 0
+    );
+    
+    const modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); background:var(--card-bg); padding:25px; border-radius:20px; box-shadow:0 10px 40px rgba(0,0,0,0.3); z-index:10000; min-width:300px; border:1px solid var(--card-border);';
+    modal.innerHTML = `
+        <h3 style="margin-bottom:15px; color:var(--btn-primary);"><i class="fas fa-user-graduate"></i> Student Info</h3>
+        <p><i class="fas fa-user"></i> <strong>${userId}</strong></p>
+        <p><i class="fas fa-check-circle"></i> Score: ${correctCount}/${totalPossible}</p>
+        <p><i class="fas fa-forward"></i> Skipped: ${skippedCount}</p>
+        <p><i class="fas fa-fire"></i> Streak: ${globalStreak}</p>
+        <hr style="margin:15px 0;">
+        <p style="font-size:12px; opacity:0.7;">Progress auto-saved</p>
+        <button id="closeUserModal" style="margin-top:15px; padding:8px 20px; background:var(--btn-primary); color:white; border:none; border-radius:20px; cursor:pointer;">Close</button>
+    `;
+    document.body.appendChild(modal);
+    document.getElementById('closeUserModal').onclick = () => modal.remove();
 }
 
-// Initialize game
-function initGame() {
-    if (typeof randomizeAllQuestions === 'function') {
-        randomizeAllQuestions();
-    }
-    
-    initializeUser();
-    
-    totalPossible = 0;
-    for (let tid of TOPIC_ORDER) {
-        const qlist = TOPICS[tid].questions;
-        totalPossible += qlist.length;
-        if (!topicsState[tid]) {
-            topicsState[tid] = {
-                currentIdx: 0,
-                answers: qlist.map(() => ({ answered: false, correct: false, userAnswer: null }))
-            };
-        }
-    }
-    
-    const loaded = loadProgress();
-    
-    document.getElementById('totalPossible').innerText = totalPossible;
-    document.getElementById('totalMastery').innerText = TOPIC_ORDER.length;
-    
-    addUserControls();
-    
-    updateStats();
-    renderDashboard();
-    loadTheme();
-    
-    if (loaded) {
-        showToast(`Welcome back, ${userId}! Your progress has been loaded.`);
-    }
-}
-
-function addUserControls() {
+// ==================== UI FUNCTIONS ====================
+function addControls() {
     const statsSection = document.querySelector('.stats-section');
-    if (statsSection && !document.getElementById('userInfoBtn')) {
+    if (!statsSection) return;
+    
+    // Add User button
+    if (!document.getElementById('userInfoBtn')) {
         const userBtn = document.createElement('button');
         userBtn.id = 'userInfoBtn';
         userBtn.className = 'pdf-btn';
-        userBtn.innerHTML = `<i class="fas fa-user"></i> ${userId.substring(0, 12)}`;
+        userBtn.innerHTML = `<i class="fas fa-user"></i> ${userId.substring(0, 10)}`;
         userBtn.onclick = showUserInfo;
-        
+        statsSection.appendChild(userBtn);
+    }
+    
+    // Add Reset button
+    if (!document.getElementById('resetProgressBtn')) {
         const resetBtn = document.createElement('button');
         resetBtn.id = 'resetProgressBtn';
         resetBtn.className = 'pdf-btn';
-        resetBtn.innerHTML = `<i class="fas fa-trash-alt"></i> Reset`;
+        resetBtn.innerHTML = '<i class="fas fa-trash-alt"></i> Reset';
         resetBtn.style.background = '#f44336';
         resetBtn.onclick = resetProgress;
-        
-        statsSection.appendChild(userBtn);
         statsSection.appendChild(resetBtn);
     }
+    
+    // Add CSS for skip button
+    const style = document.createElement('style');
+    style.textContent = `
+        .action-buttons-group {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .dont-know-btn {
+            background: #ff9800;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .dont-know-btn:hover {
+            background: #f57c00;
+            transform: translateY(-2px);
+        }
+        .feedback-skipped {
+            background: #fff3e0;
+            border-left: 4px solid #ff9800;
+            color: #e65100;
+        }
+        .question-type-badge {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .badge-mc, .badge-sa, .badge-fr {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-mc { background: #2196f3; color: white; }
+        .badge-sa { background: #4caf50; color: white; }
+        .badge-fr { background: #ff9800; color: white; }
+        .unit-badge {
+            font-size: 0.7rem;
+            padding: 4px 8px;
+            background: rgba(33,150,243,0.2);
+            border-radius: 12px;
+            color: var(--text-secondary);
+        }
+        .disclaimer-box {
+            background: rgba(33,150,243,0.1);
+            border-left: 4px solid #2196f3;
+            padding: 10px 15px;
+            margin: 15px 0;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            display: flex;
+            gap: 10px;
+        }
+        .short-answer-area {
+            margin: 20px 0;
+        }
+        .short-answer-input {
+            width: 100%;
+            padding: 12px;
+            border-radius: 12px;
+            border: 1px solid var(--card-border);
+            background: var(--option-bg);
+            color: var(--text-primary);
+            font-family: inherit;
+            resize: vertical;
+            margin-top: 8px;
+        }
+        .answer-instructions {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            padding: 6px 12px;
+            background: rgba(0,0,0,0.05);
+            border-radius: 8px;
+        }
+        .option-btn.selected {
+            background: rgba(33,150,243,0.2);
+            border-color: #2196f3;
+        }
+        .submit-btn {
+            background: #4caf50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: 600;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .submit-btn:disabled {
+            background: #757575;
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+        .submit-btn:hover:not(:disabled) {
+            background: #45a049;
+            transform: translateY(-2px);
+        }
+    `;
+    document.head.appendChild(style);
 }
 
 function updateStats() {
@@ -140,7 +245,7 @@ function updateStats() {
     for (let tid of TOPIC_ORDER) {
         const state = topicsState[tid];
         if (state) {
-            const correct = state.answers.filter(a => a.correct).length;
+            const correct = state.answers.filter(a => a.status === 'correct').length;
             totalCorrect += correct;
             if (correct === TOPICS[tid].questions.length) masteredCount++;
         }
@@ -148,7 +253,6 @@ function updateStats() {
     document.getElementById('totalScore').innerText = totalCorrect;
     document.getElementById('masteryComplete').innerText = masteredCount;
     document.getElementById('streakCount').innerText = globalStreak;
-    
     saveProgress();
 }
 
@@ -163,15 +267,14 @@ function renderDashboard() {
         const state = topicsState[tid];
         if (!state) continue;
         
-        const correctCount = state.answers.filter(a => a.correct).length;
+        const correctCount = state.answers.filter(a => a.status === 'correct').length;
         const totalQs = topic.questions.length;
         const isMastered = correctCount === totalQs;
         const progressPercent = (correctCount / totalQs) * 100;
         
         const card = document.createElement('div');
-        card.className = `topic-card`;
+        card.className = 'topic-card';
         card.onclick = () => openTopic(tid);
-        
         card.innerHTML = `
             <div class="card-header">
                 <i class="${topic.icon}"></i>
@@ -200,16 +303,13 @@ function openTopic(tid) {
     selectedAnswerValue = null;
     shortAnswerText = null;
     isProcessing = false;
+    
     document.getElementById('arenaTitle').innerHTML = `<i class="${TOPICS[tid].icon}"></i> ${TOPICS[tid].name}`;
     document.getElementById('quizArena').classList.remove('hidden');
     renderQuiz();
 }
 
 function closeArena() {
-    if (autoAdvanceTimer) {
-        clearTimeout(autoAdvanceTimer);
-        autoAdvanceTimer = null;
-    }
     document.getElementById('quizArena').classList.add('hidden');
     currentTopic = null;
     selectedAnswerValue = null;
@@ -227,7 +327,7 @@ function renderQuiz() {
     const topic = TOPICS[currentTopic];
     const state = topicsState[currentTopic];
     const totalQs = topic.questions.length;
-    const correctCount = state.answers.filter(a => a.correct).length;
+    const correctCount = state.answers.filter(a => a.status === 'correct').length;
     const allQuestionsAnswered = state.answers.every(a => a.answered === true);
     
     document.getElementById('progressInfo').innerHTML = `<i class="fas fa-chart-line"></i> ${correctCount}/${totalQs} Correct`;
@@ -279,14 +379,17 @@ function renderQuiz() {
     
     const current = topic.questions[state.currentIdx];
     const isAnswered = state.answers[state.currentIdx].answered;
-    const isCorrect = state.answers[state.currentIdx].correct;
+    const currentStatus = state.answers[state.currentIdx].status;
     const progressPercent = (state.answers.filter(a => a.answered).length / totalQs) * 100;
     
-    let feedbackHtml = `<i class="fas fa-brain"></i> Select an answer and click Submit`;
+    let feedbackHtml = `<i class="fas fa-brain"></i> Select an answer, click "Don't Know" to skip, or click Submit`;
     let feedbackClass = '';
     
     if (isAnswered) {
-        if (isCorrect) {
+        if (currentStatus === 'skipped') {
+            feedbackHtml = `<i class="fas fa-book-open"></i> You skipped this question.<br><strong>Correct answer:</strong> ${current.correctAnswer || current.correct}`;
+            feedbackClass = 'feedback-skipped';
+        } else if (currentStatus === 'correct') {
             feedbackHtml = `<i class="fas fa-check-circle"></i> Correct! ${current.hint || 'Well done!'}`;
             feedbackClass = 'feedback-correct';
         } else {
@@ -295,227 +398,197 @@ function renderQuiz() {
         }
     }
     
-    // Build disclaimer if it exists
     const disclaimerHtml = current.disclaimer ? `
         <div class="disclaimer-box">
-            <i class="fas fa-info-circle"></i>
-            <strong>Answer Format:</strong> ${current.disclaimer}
+            <i class="fas fa-info-circle"></i> ${current.disclaimer}
         </div>
     ` : '';
     
-    // Render based on question type
     let inputHtml = '';
     if (current.type === 'mc') {
         inputHtml = `
             <div class="options-grid" id="optionsContainer">
-                ${current.options.map((opt, idx) => {
+                ${current.options.map((opt) => {
                     let icon = 'fa-circle';
                     let selectedClass = '';
-                    
-                    if (isAnswered) {
-                        if (opt === current.correct) {
-                            icon = 'fa-check-circle';
-                        }
-                        if (opt === selectedAnswerValue && !isCorrect) {
-                            icon = 'fa-times-circle';
-                        }
-                    } else {
-                        if (selectedAnswerValue === opt) {
-                            icon = 'fa-check-circle';
-                            selectedClass = 'selected';
-                        }
+                    if (!isAnswered && selectedAnswerValue === opt) {
+                        icon = 'fa-check-circle';
+                        selectedClass = 'selected';
+                    } else if (isAnswered && currentStatus !== 'skipped' && opt === current.correct) {
+                        icon = 'fa-check-circle';
+                    } else if (isAnswered && currentStatus !== 'skipped' && opt === selectedAnswerValue && currentStatus === 'incorrect') {
+                        icon = 'fa-times-circle';
                     }
-                    
                     return `
                         <button class="option-btn ${selectedClass}" data-opt="${opt.replace(/"/g, '&quot;')}" ${isAnswered ? 'disabled' : ''}>
-                            <i class="fas ${icon}"></i>
-                            ${opt}
+                            <i class="fas ${icon}"></i> ${opt}
                         </button>
                     `;
                 }).join('')}
             </div>
         `;
     } else {
-        // Short answer or free response
         const userAnswer = state.answers[state.currentIdx].userAnswer || '';
         inputHtml = `
             <div class="short-answer-area">
-                <label for="shortAnswerInput"><i class="fas fa-pen"></i> Your Answer:</label>
-                <textarea id="shortAnswerInput" class="short-answer-input" rows="6" ${isAnswered ? 'disabled' : ''} 
-                    placeholder="Type your answer here. Be specific and use complete sentences. Show calculations where applicable.">${isAnswered ? userAnswer : ''}</textarea>
-                <div class="answer-instructions">
-                    <i class="fas fa-info-circle"></i>
-                    <strong>For written responses:</strong> Show all work, include units, and explain your reasoning clearly.
-                    Partial credit may be awarded for correct reasoning even if the final answer is incorrect.
-                </div>
+                <textarea id="shortAnswerInput" class="short-answer-input" rows="5" ${isAnswered ? 'disabled' : ''} 
+                    placeholder="Type your answer here. Show work for calculations.">${isAnswered && currentStatus !== 'skipped' ? userAnswer : ''}</textarea>
+                <div class="answer-instructions"><i class="fas fa-info-circle"></i> Show all work, include units, explain reasoning.</div>
             </div>
         `;
     }
     
+    const dontKnowBtnHtml = !isAnswered ? `<button class="dont-know-btn" id="dontKnowBtn"><i class="fas fa-question-circle"></i> Skip</button>` : '';
+    
     container.innerHTML = `
         <div class="question-card">
-            <div class="progress-bar" style="margin-bottom: 1rem;">
-                <div class="progress-fill" style="width: ${progressPercent}%"></div>
-            </div>
+            <div class="progress-bar"><div class="progress-fill" style="width: ${progressPercent}%"></div></div>
             <div class="question-type-badge">
-                <span class="badge ${current.type === 'mc' ? 'badge-mc' : (current.type === 'sa' ? 'badge-sa' : 'badge-fr')}">
-                    ${current.type === 'mc' ? 'Multiple Choice' : (current.type === 'sa' ? 'Short Answer' : 'Free Response')}
-                </span>
+                <span class="badge-${current.type === 'mc' ? 'mc' : (current.type === 'sa' ? 'sa' : 'fr')}">${current.type === 'mc' ? 'Multiple Choice' : (current.type === 'sa' ? 'Short Answer' : 'Free Response')}</span>
                 <span class="unit-badge">${current.unit || 'AP Chemistry'}</span>
             </div>
             ${disclaimerHtml}
-            <div class="question-text">
-                <i class="fas fa-question-circle"></i> ${current.text}
-            </div>
+            <div class="question-text"><i class="fas fa-question-circle"></i> ${current.text}</div>
             ${inputHtml}
             <div class="feedback ${feedbackClass}">${feedbackHtml}</div>
-            ${!isAnswered ? `<button class="submit-btn" id="submitAnswerBtn"><i class="fas fa-check"></i> Submit Answer</button>` : ''}
-            ${isAnswered ? `<button class="next-btn" id="nextQuestionBtn"><i class="fas fa-forward"></i> Next Question</button>` : ''}
+            ${!isAnswered ? `
+                <div class="action-buttons-group">
+                    <button class="submit-btn" id="submitAnswerBtn"><i class="fas fa-check"></i> Submit Answer</button>
+                    ${dontKnowBtnHtml}
+                </div>
+            ` : `<button class="next-btn" id="nextQuestionBtn"><i class="fas fa-forward"></i> Next Question</button>`}
         </div>
     `;
     
+    // Attach event handlers
     if (!isAnswered) {
-        if (current.type === 'mc') {
-            const btns = document.querySelectorAll('.option-btn');
-            const submitBtn = document.getElementById('submitAnswerBtn');
-            
-            if (submitBtn) {
-                submitBtn.disabled = true;
-                submitBtn.style.opacity = '0.7';
-                submitBtn.style.cursor = 'not-allowed';
-            }
-            
-            btns.forEach((btn) => {
-                btn.addEventListener('click', (e) => {
-                    const selected = btn.getAttribute('data-opt');
-                    selectedAnswerValue = selected;
-                    
-                    btns.forEach((otherBtn) => {
-                        const otherIcon = otherBtn.querySelector('i');
-                        const otherOpt = otherBtn.getAttribute('data-opt');
-                        if (otherIcon) {
-                            if (otherOpt === selected) {
-                                otherIcon.className = 'fas fa-check-circle';
-                                otherBtn.classList.add('selected');
-                            } else {
-                                otherIcon.className = 'fas fa-circle';
-                                otherBtn.classList.remove('selected');
-                            }
-                        }
-                    });
-                    
-                    if (submitBtn) {
-                        submitBtn.disabled = false;
-                        submitBtn.style.opacity = '1';
-                        submitBtn.style.cursor = 'pointer';
-                        submitBtn.classList.add('active');
-                    }
-                });
-            });
-            
-            if (submitBtn) {
-                const handleSubmit = () => {
-                    if (!selectedAnswerValue) {
-                        const feedbackDiv = document.querySelector('.feedback');
-                        feedbackDiv.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Please select an answer first!';
-                        feedbackDiv.classList.add('feedback-wrong');
-                        setTimeout(() => {
-                            if (!isAnswered) renderQuiz();
-                        }, 1200);
-                        return;
-                    }
-                    
-                    if (isProcessing) return;
-                    isProcessing = true;
-                    
-                    const isOptionCorrect = (selectedAnswerValue === current.correct);
-                    submitAnswer(currentTopic, selectedAnswerValue, isOptionCorrect);
-                };
-                
-                submitBtn.removeEventListener('click', handleSubmit);
-                submitBtn.addEventListener('click', handleSubmit);
-            }
-        } else {
-            // Short answer / free response
-            const textarea = document.getElementById('shortAnswerInput');
-            const submitBtn = document.getElementById('submitAnswerBtn');
-            
-            if (submitBtn) {
-                submitBtn.disabled = true;
-                submitBtn.style.opacity = '0.7';
-                submitBtn.style.cursor = 'not-allowed';
-            }
-            
-            if (textarea) {
-                textarea.addEventListener('input', () => {
-                    if (textarea.value.trim().length > 0) {
-                        if (submitBtn) {
-                            submitBtn.disabled = false;
-                            submitBtn.style.opacity = '1';
-                            submitBtn.style.cursor = 'pointer';
-                            submitBtn.classList.add('active');
-                        }
-                        shortAnswerText = textarea.value;
-                    } else {
-                        if (submitBtn) {
-                            submitBtn.disabled = true;
-                            submitBtn.style.opacity = '0.7';
-                            submitBtn.style.cursor = 'not-allowed';
-                            submitBtn.classList.remove('active');
-                        }
-                    }
-                });
-            }
-            
-            if (submitBtn) {
-                const handleSubmit = () => {
-                    const userAnswer = shortAnswerText || (textarea ? textarea.value.trim() : '');
-                    if (!userAnswer) {
-                        const feedbackDiv = document.querySelector('.feedback');
-                        feedbackDiv.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Please enter your answer before submitting!';
-                        feedbackDiv.classList.add('feedback-wrong');
-                        setTimeout(() => {
-                            if (!isAnswered) renderQuiz();
-                        }, 1500);
-                        return;
-                    }
-                    
-                    if (isProcessing) return;
-                    isProcessing = true;
-                    
-                    // For written answers, we need to check if the answer matches the correct answer
-                    const userAnswerLower = userAnswer.toLowerCase();
-                    const correctAnswerLower = (current.correctAnswer || current.correct).toLowerCase();
-                    
-                    // Check for key concepts in the user's answer
-                    const keyTerms = correctAnswerLower.split(' ').filter(word => word.length > 4);
-                    let matchCount = 0;
-                    for (let term of keyTerms) {
-                        if (userAnswerLower.includes(term)) {
-                            matchCount++;
-                        }
-                    }
-                    
-                    // Calculate a score based on matches
-                    const matchPercentage = keyTerms.length > 0 ? matchCount / keyTerms.length : 0;
-                    const isAnswerCorrect = matchPercentage >= 0.5 || userAnswerLower.includes(correctAnswerLower.substring(0, 30));
-                    
-                    submitShortAnswer(currentTopic, userAnswer, isAnswerCorrect);
-                };
-                
-                submitBtn.removeEventListener('click', handleSubmit);
-                submitBtn.addEventListener('click', handleSubmit);
-            }
-        }
+        attachEventHandlers(current);
     }
     
     const nextBtn = document.getElementById('nextQuestionBtn');
     if (nextBtn) {
-        const handleNext = () => {
-            nextQuestion(currentTopic);
-        };
-        nextBtn.removeEventListener('click', handleNext);
-        nextBtn.addEventListener('click', handleNext);
+        nextBtn.onclick = () => nextQuestion(currentTopic);
+    }
+}
+
+function attachEventHandlers(current) {
+    if (current.type === 'mc') {
+        const btns = document.querySelectorAll('.option-btn');
+        const submitBtn = document.getElementById('submitAnswerBtn');
+        const dontKnowBtn = document.getElementById('dontKnowBtn');
+        
+        // Reset submit button
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.style.opacity = '0.7';
+        }
+        
+        // Handle option selection
+        btns.forEach(btn => {
+            btn.onclick = (e) => {
+                e.preventDefault();
+                selectedAnswerValue = btn.getAttribute('data-opt');
+                
+                // Update all buttons
+                btns.forEach(b => {
+                    const icon = b.querySelector('i');
+                    if (b.getAttribute('data-opt') === selectedAnswerValue) {
+                        icon.className = 'fas fa-check-circle';
+                        b.classList.add('selected');
+                    } else {
+                        icon.className = 'fas fa-circle';
+                        b.classList.remove('selected');
+                    }
+                });
+                
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.style.opacity = '1';
+                }
+            };
+        });
+        
+        // Handle submit
+        if (submitBtn) {
+            submitBtn.onclick = (e) => {
+                e.preventDefault();
+                if (!selectedAnswerValue) {
+                    const feedbackDiv = document.querySelector('.feedback');
+                    feedbackDiv.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Please select an answer or click "Don\'t Know"!';
+                    feedbackDiv.classList.add('feedback-wrong');
+                    return;
+                }
+                if (isProcessing) return;
+                isProcessing = true;
+                const isCorrect = (selectedAnswerValue === current.correct);
+                submitAnswer(currentTopic, selectedAnswerValue, isCorrect);
+            };
+        }
+        
+        // Handle Don't Know
+        if (dontKnowBtn) {
+            dontKnowBtn.onclick = (e) => {
+                e.preventDefault();
+                if (isProcessing) return;
+                isProcessing = true;
+                submitSkip(currentTopic);
+            };
+        }
+    } else {
+        // Short answer / free response
+        const textarea = document.getElementById('shortAnswerInput');
+        const submitBtn = document.getElementById('submitAnswerBtn');
+        const dontKnowBtn = document.getElementById('dontKnowBtn');
+        
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.style.opacity = '0.7';
+        }
+        
+        if (textarea) {
+            textarea.oninput = () => {
+                if (textarea.value.trim().length > 0) {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.style.opacity = '1';
+                    }
+                    shortAnswerText = textarea.value;
+                } else {
+                    if (submitBtn) {
+                        submitBtn.disabled = true;
+                        submitBtn.style.opacity = '0.7';
+                    }
+                }
+            };
+        }
+        
+        if (submitBtn) {
+            submitBtn.onclick = (e) => {
+                e.preventDefault();
+                const answer = shortAnswerText || (textarea ? textarea.value.trim() : '');
+                if (!answer) {
+                    const feedbackDiv = document.querySelector('.feedback');
+                    feedbackDiv.innerHTML = '<i class="fas fa-exclamation-triangle"></i> Please enter your answer or click "Don\'t Know"!';
+                    feedbackDiv.classList.add('feedback-wrong');
+                    return;
+                }
+                if (isProcessing) return;
+                isProcessing = true;
+                const correctAnswer = (current.correctAnswer || current.correct).toLowerCase();
+                const isCorrect = answer.toLowerCase().includes(correctAnswer.substring(0, 30)) ||
+                    correctAnswer.split(' ').some(word => word.length > 4 && answer.toLowerCase().includes(word));
+                submitAnswer(currentTopic, answer, isCorrect);
+            };
+        }
+        
+        if (dontKnowBtn) {
+            dontKnowBtn.onclick = (e) => {
+                e.preventDefault();
+                if (isProcessing) return;
+                isProcessing = true;
+                submitSkip(currentTopic);
+            };
+        }
     }
 }
 
@@ -523,7 +596,7 @@ function retryTopic(tid) {
     const totalQs = TOPICS[tid].questions.length;
     topicsState[tid] = {
         currentIdx: 0,
-        answers: Array(totalQs).fill().map(() => ({ answered: false, correct: false, userAnswer: null }))
+        answers: Array(totalQs).fill().map(() => ({ answered: false, status: null, userAnswer: null }))
     };
     
     selectedAnswerValue = null;
@@ -536,34 +609,12 @@ function retryTopic(tid) {
     openTopic(tid);
 }
 
-function submitAnswer(tid, selected, isCorrect) {
+function submitAnswer(tid, userAnswer, isCorrect) {
     const state = topicsState[tid];
+    const status = isCorrect ? 'correct' : 'incorrect';
     
     state.answers[state.currentIdx].answered = true;
-    state.answers[state.currentIdx].correct = isCorrect;
-    state.answers[state.currentIdx].userAnswer = selected;
-    
-    if (isCorrect) {
-        globalStreak++;
-        triggerConfetti();
-    } else {
-        globalStreak = 0;
-    }
-    
-    selectedAnswerValue = null;
-    isProcessing = false;
-    
-    renderQuiz();
-    updateStats();
-    renderDashboard();
-    saveProgress();
-}
-
-function submitShortAnswer(tid, userAnswer, isCorrect) {
-    const state = topicsState[tid];
-    
-    state.answers[state.currentIdx].answered = true;
-    state.answers[state.currentIdx].correct = isCorrect;
+    state.answers[state.currentIdx].status = status;
     state.answers[state.currentIdx].userAnswer = userAnswer;
     
     if (isCorrect) {
@@ -573,12 +624,30 @@ function submitShortAnswer(tid, userAnswer, isCorrect) {
         globalStreak = 0;
     }
     
+    selectedAnswerValue = null;
     shortAnswerText = null;
     isProcessing = false;
     
     renderQuiz();
     updateStats();
-    renderDashboard();
+    saveProgress();
+}
+
+function submitSkip(tid) {
+    const state = topicsState[tid];
+    
+    state.answers[state.currentIdx].answered = true;
+    state.answers[state.currentIdx].status = 'skipped';
+    state.answers[state.currentIdx].userAnswer = '(Skipped)';
+    
+    globalStreak = 0;
+    
+    selectedAnswerValue = null;
+    shortAnswerText = null;
+    isProcessing = false;
+    
+    renderQuiz();
+    updateStats();
     saveProgress();
 }
 
@@ -596,7 +665,6 @@ function nextQuestion(tid) {
     } else {
         renderQuiz();
         updateStats();
-        renderDashboard();
         saveProgress();
     }
 }
@@ -631,7 +699,6 @@ function triggerConfetti() {
             confettiAnimationId = null;
             return;
         }
-        
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         for (let p of particles) {
             p.y += p.speedY;
@@ -647,7 +714,7 @@ function triggerConfetti() {
 function showToast(message) {
     const toast = document.createElement('div');
     toast.className = 'toast-notification';
-    toast.innerHTML = `<i class="fas fa-save"></i> ${message}`;
+    toast.innerHTML = `<i class="fas fa-info-circle"></i> ${message}`;
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 3000);
 }
@@ -664,37 +731,57 @@ function generateReport() {
     `;
     
     let totalCorrect = 0;
+    let totalSkipped = 0;
+    
     for (let tid of TOPIC_ORDER) {
         const topic = TOPICS[tid];
         const state = topicsState[tid];
-        const correctCount = state.answers.filter(a => a.correct).length;
+        const correctCount = state.answers.filter(a => a.status === 'correct').length;
+        const skippedCount = state.answers.filter(a => a.status === 'skipped').length;
         totalCorrect += correctCount;
+        totalSkipped += skippedCount;
         
         reportHtml += `<h2>${topic.name}</h2>`;
-        reportHtml += `<p>Score: ${correctCount}/${topic.questions.length} (${Math.round(correctCount/topic.questions.length*100)}%)</p>`;
-        
+        reportHtml += `<p>Score: ${correctCount}/${topic.questions.length} (${Math.round(correctCount/topic.questions.length*100)}%) | Skipped: ${skippedCount}</p>`;
         reportHtml += `<table style="width:100%; border-collapse: collapse;">`;
-        reportHtml += `<tr style="background:#2196f3; color:white;"><th style="padding:8px;">#</th><th style="padding:8px;">Question</th><th style="padding:8px;">Type</th><th style="padding:8px;">Status</th><th style="padding:8px;">Your Answer</th><th style="padding:8px;">Correct Answer</th></tr>`;
+        reportHtml += `<tr style="background:#2196f3; color:white;"><th style="padding:8px;">#</th><th style="padding:8px;">Question</th><th style="padding:8px;">Type</th><th style="padding:8px;">Status</th><th style="padding:8px;">Your Answer</th><th style="padding:8px;">Correct Answer</th>`;
         
         topic.questions.forEach((q, idx) => {
-            const isCorrect = state.answers[idx]?.correct || false;
-            const userAnswer = state.answers[idx]?.userAnswer || 'Not answered';
+            const answer = state.answers[idx];
+            const status = answer?.status || 'not answered';
+            const userAnswer = answer?.userAnswer || 'Not answered';
             const answerDisplay = userAnswer.length > 100 ? userAnswer.substring(0, 100) + '...' : userAnswer;
+            
+            let statusText = '';
+            let statusColor = '';
+            if (status === 'correct') {
+                statusText = '✓ Correct';
+                statusColor = '#4caf50';
+            } else if (status === 'incorrect') {
+                statusText = '✗ Incorrect';
+                statusColor = '#f44336';
+            } else if (status === 'skipped') {
+                statusText = '⏭ Skipped';
+                statusColor = '#ff9800';
+            } else {
+                statusText = '○ Not Answered';
+                statusColor = '#757575';
+            }
+            
             reportHtml += `<tr style="border-bottom:1px solid #ddd;">
-                <td style="padding:8px;">${idx+1}</td>
-                <td style="padding:8px;">${q.text.substring(0, 80)}...</td>
-                <td style="padding:8px;">${q.type === 'mc' ? 'MC' : (q.type === 'sa' ? 'SA' : 'FR')}</td>
-                <td style="padding:8px; color:${isCorrect ? '#4caf50' : '#f44336'};">${isCorrect ? '✓ Correct' : '✗ Incorrect'}</td>
-                <td style="padding:8px; max-width:200px;">${answerDisplay}</td>
-                <td style="padding:8px;">${(q.correctAnswer || q.correct || 'N/A').substring(0, 80)}</td>
-             </tr>`;
+                <td style="padding:8px;">${idx+1}<\/td>
+                <td style="padding:8px;">${q.text.substring(0, 80)}...<\/td>
+                <td style="padding:8px;">${q.type === 'mc' ? 'MC' : (q.type === 'sa' ? 'SA' : 'FR')}<\/td>
+                <td style="padding:8px; color:${statusColor};">${statusText}<\/td>
+                <td style="padding:8px; max-width:200px;">${answerDisplay}<\/td>
+                <td style="padding:8px;">${(q.correctAnswer || q.correct || 'N/A').substring(0, 80)}<\/td>
+             <\/tr>`;
         });
-        reportHtml += `</table><br>`;
+        reportHtml += `<\/table><br>`;
     }
     
     reportHtml += `<hr><p><strong>Overall Score:</strong> ${totalCorrect}/${totalPossible} (${Math.round(totalCorrect/totalPossible*100)}%)</p>`;
-    reportHtml += `<p><strong>Streak:</strong> ${globalStreak}</p>`;
-    reportHtml += `<p><i>Note: Written responses are evaluated based on key concept inclusion. Review the correct answers to see what was expected.</i></p>`;
+    reportHtml += `<p><strong>Skipped Questions:</strong> ${totalSkipped}</p>`;
     reportHtml += `</div>`;
     
     const printWindow = window.open('', '_blank');
@@ -708,152 +795,65 @@ function generateReport() {
     printWindow.print();
 }
 
-// Theme Functions
+// ==================== THEME FUNCTIONS ====================
 function loadTheme() {
     const saved = localStorage.getItem('chemTheme') || 'dark';
     document.body.setAttribute('data-theme', saved);
-    
     document.querySelectorAll('.theme-btn').forEach(btn => {
-        if (btn.dataset.theme === saved) {
-            btn.classList.add('active');
-        } else {
-            btn.classList.remove('active');
-        }
+        if (btn.dataset.theme === saved) btn.classList.add('active');
+        else btn.classList.remove('active');
     });
 }
 
 function applyTheme(theme) {
     document.body.setAttribute('data-theme', theme);
     localStorage.setItem('chemTheme', theme);
-    
     document.querySelectorAll('.theme-btn').forEach(btn => {
-        if (btn.dataset.theme === theme) {
-            btn.classList.add('active');
-        } else {
-            btn.classList.remove('active');
-        }
+        if (btn.dataset.theme === theme) btn.classList.add('active');
+        else btn.classList.remove('active');
     });
-    
     const modal = document.getElementById('themeModal');
     if (modal) modal.classList.remove('show');
-    
     showToast(`${theme === 'dark' ? 'Dark' : theme === 'light' ? 'Light' : 'High Contrast'} theme applied!`);
 }
 
-// Add CSS for short answer and badges
-function addAdditionalStyles() {
-    const style = document.createElement('style');
-    style.textContent = `
-        .question-type-badge {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 1rem;
+// ==================== INITIALIZATION ====================
+function initGame() {
+    if (typeof randomizeAllQuestions === 'function') {
+        randomizeAllQuestions();
+    }
+    
+    initializeUser();
+    
+    totalPossible = 0;
+    for (let tid of TOPIC_ORDER) {
+        const qlist = TOPICS[tid].questions;
+        totalPossible += qlist.length;
+        if (!topicsState[tid]) {
+            topicsState[tid] = {
+                currentIdx: 0,
+                answers: qlist.map(() => ({ answered: false, status: null, userAnswer: null }))
+            };
         }
-        .badge {
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-        .badge-mc {
-            background: #2196f3;
-            color: white;
-        }
-        .badge-sa {
-            background: #4caf50;
-            color: white;
-        }
-        .badge-fr {
-            background: #ff9800;
-            color: white;
-        }
-        .unit-badge {
-            font-size: 0.7rem;
-            padding: 4px 8px;
-            background: rgba(33, 150, 243, 0.2);
-            border-radius: 12px;
-            color: var(--text-secondary);
-        }
-        .disclaimer-box {
-            background: rgba(33, 150, 243, 0.1);
-            border-left: 4px solid #2196f3;
-            padding: 12px 16px;
-            margin: 12px 0;
-            border-radius: 8px;
-            font-size: 0.85rem;
-            display: flex;
-            align-items: flex-start;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        .disclaimer-box i {
-            color: #2196f3;
-            font-size: 1rem;
-            margin-top: 2px;
-        }
-        .short-answer-area {
-            margin: 1.5rem 0;
-        }
-        .short-answer-area label {
-            font-weight: 600;
-            display: block;
-            margin-bottom: 0.5rem;
-            color: var(--text-primary);
-        }
-        .short-answer-input {
-            width: 100%;
-            padding: 1rem;
-            border-radius: 12px;
-            border: 1px solid var(--card-border);
-            background: var(--option-bg);
-            color: var(--text-primary);
-            font-family: inherit;
-            font-size: 0.95rem;
-            resize: vertical;
-            line-height: 1.5;
-        }
-        .short-answer-input:focus {
-            outline: none;
-            border-color: var(--btn-primary);
-        }
-        .short-answer-input:disabled {
-            opacity: 0.7;
-            background: var(--progress-bg);
-        }
-        .answer-instructions {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            margin-top: 0.75rem;
-            padding: 8px 12px;
-            background: rgba(0,0,0,0.05);
-            border-radius: 8px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        .answer-instructions i {
-            color: #ff9800;
-        }
-        .feedback-wrong strong {
-            color: #f44336;
-        }
-        .feedback-correct strong {
-            color: #4caf50;
-        }
-        .option-btn.selected {
-            background: rgba(33, 150, 243, 0.2);
-            border-color: #2196f3;
-        }
-    `;
-    document.head.appendChild(style);
+    }
+    
+    const loaded = loadProgress();
+    
+    document.getElementById('totalPossible').innerText = totalPossible;
+    document.getElementById('totalMastery').innerText = TOPIC_ORDER.length;
+    
+    addControls();
+    updateStats();
+    renderDashboard();
+    loadTheme();
+    
+    if (loaded) {
+        showToast(`Welcome back, ${userId}! Your progress has been loaded.`);
+    }
 }
 
-// Event Listeners
+// ==================== EVENT LISTENERS ====================
 document.addEventListener('DOMContentLoaded', () => {
-    addAdditionalStyles();
-    
     const reportBtn = document.getElementById('pdfReportBtn');
     if (reportBtn) reportBtn.addEventListener('click', generateReport);
     
